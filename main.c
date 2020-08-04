@@ -34,7 +34,7 @@ poweroff
 
 //#define DEBUG_PRINT
 
-#define SOFTWARE_VER        "0.3"
+#define SOFTWARE_VER        "0.4"
 
 #define CHARGE_STATUS       "/sys/class/power_supply/battery/status"
 #define BATTERY_CAPACITY    "/sys/class/power_supply/battery/capacity"
@@ -52,7 +52,8 @@ poweroff
 #endif
 
 int daemonize = 1;
-const char *poweroff_cmd[] = {"/sbin/pwrdown" , "5" , NULL};
+const char *poweroff_cmd[] = {"/sbin/pwrdown" , NULL};
+int false_alarm_sec = -1;
 
 unsigned char read_capacity(void)
 {
@@ -86,10 +87,11 @@ int charging(void)
 
 void usage (char *name) {
 	fprintf(stderr, "%s ver.%s\n", name, SOFTWARE_VER);
-	fprintf(stderr, "Usage: %s [-n]\n", name);
+	fprintf(stderr, "Usage: %s [-n] [-f sec]\n", name);
 	fprintf(stderr,
 		"-n - nodaemon\n"
 		"-h - help\n"
+		"-f sec - false alarm duration in seconds\n"
          "\n");
 }
 
@@ -98,26 +100,46 @@ void parse_command_line (int argc, char **argv) {
 	struct option long_options[] = {
 		{"nodaemon", 0, NULL, 'n'},
 		{"help", 0, NULL, 'h'},
+		{"false-alarm-duration", 1, NULL, 'f'},
 		{NULL, 0, NULL, 0}
 	};
 	int c = 0;
 
 	while (c != -1) {
-		c=getopt_long(argc, argv, "nh", long_options, NULL);
+		c=getopt_long(argc, argv, "nhf:", long_options, NULL);
 		switch (c) {
 			case 'n':
-				daemonize=0;
+				daemonize = 0;
 				break;
 			case 'h':
 				usage(argv[0]);
 				exit(0);
 				break;
+			case 'f':
+                {
+                    char *end;
+
+                    false_alarm_sec = (int)strtol(optarg, &end, 10);
+                    if (false_alarm_sec < 0) {
+                        fprintf(stderr, "Error: false alarm duration should be > 0\n");
+                        usage(argv[0]);
+                        exit(3);
+                    }
+                }
+				break;
 		}
 	}
+
 	if (optind < argc) {
 		usage(argv[0]);
 		exit(1);
 	}
+
+    if (false_alarm_sec == -1) {
+        fprintf(stderr, "Error: duration is not defined\n");
+        usage(argv[0]);
+        exit(2);
+    }
 
 }
 
@@ -182,7 +204,9 @@ int main(int argc, char **argv) {
 
     int fd_in;
     char ch;
-    unsigned char capacity, prev_cap, is_charging, prev_chrg, timeout = 0;
+    unsigned char capacity, prev_cap, is_charging, prev_chrg;
+    int timeout = false_alarm_sec;
+    int powering_off = 0;
 
 	parse_command_line(argc, argv);
 	openlog("battery_UPS", LOG_PID | (daemonize ? 0 : LOG_PERROR), LOG_DAEMON);
@@ -195,24 +219,19 @@ int main(int argc, char **argv) {
 	if (daemonize) {
 		if (daemon(0,0) == -1) {
 			perror("daemon");
+            closelog();
 			exit(1);
 		}
         syslog(LOG_NOTICE, "started in daemon mode\n");
 	} else {
         syslog(LOG_NOTICE, "started in non-daemon mode\n");
 	}
-/*
-    if (argc < 2) {
-        printf("Usage: %s /dev/input/eventN\n", argv[0]); // /dev/input/by-path/platform-gpio-keys-event
-        return 1;
-    }
 
-    fd_in = open(argv[1], O_RDONLY | O_NONBLOCK);
-*/
     fd_in = open(BATTERY_PRESENT, O_RDONLY | O_NONBLOCK);
     if (fd_in < 0) {
         perror("open");
-        return 1;
+        closelog();
+        exit(1);
     }
 	read (fd_in, &ch, sizeof(ch));
 	close (fd_in);
@@ -231,22 +250,27 @@ int main(int argc, char **argv) {
         if (is_charging) {
             sleep(1);
             prev_cap = capacity;
-            capacity = read_capacity(); //100;
+            capacity = read_capacity();
             print_dbg("Charging: capacity now: %d\n", capacity);
+            timeout =  false_alarm_sec;
+            powering_off = 0;
             if ((prev_cap != capacity) || (prev_chrg != is_charging))  {
                 syslog(LOG_NOTICE, "charging: capacity = %d\n", capacity);
-                timeout = 0;
             }
         } else {
-            syslog(LOG_NOTICE, "discharging: capacity = %d\n", capacity);
-            timeout++;
-            if (timeout > 3) {
-                syslog(LOG_NOTICE, "external power fail, powering off\n");
-                if (exec_prog(poweroff_cmd)) {
-                    syslog(LOG_NOTICE, "error of daemon execution\n");
+            if (!powering_off) {
+                syslog(LOG_NOTICE, "discharging: capacity = %d, countdown = %d\n", capacity, timeout);
+                timeout--;
+                if (timeout <= 0) {
+                    syslog(LOG_NOTICE, "external power fail, powering off\n");
+                    if (exec_prog(poweroff_cmd)) {
+                        syslog(LOG_NOTICE, "error of daemon execution\n");
+                    } else {
+                        powering_off = 1;
+                    }
                 }
+                sleep(1);
             }
-            sleep(1);
         }
 
     }
