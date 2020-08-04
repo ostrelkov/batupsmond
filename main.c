@@ -1,15 +1,15 @@
 /*
  * Short-Description: battery UPS monitor daemon
- * Description:       The batupsmond service daemon is able to monitor 
+ * Description:       The batupsmond service daemon is able to monitor
  *                    battery status. If external power supply is absent
- *                    and battery is discharging then daemon execute /sbin/pwrdown 
- *                    script to power off 
- * 
+ *                    and battery is discharging then daemon execute /sbin/pwrdown
+ *                    script to power off
+ *
  * pwrdown script:
 #!/bin/sh
 sleep $1
 poweroff
- * 
+ *
  * Author: Oleg Strelkov <o.strelkov@gmail.com>
  */
 #include <fcntl.h>
@@ -182,7 +182,7 @@ int main(int argc, char **argv) {
 
     int fd_in;
     char ch;
-    unsigned char capacity, prev_cap, is_charging, prev_chrg;
+    unsigned char capacity, prev_cap, is_charging, prev_chrg, timeout = 0;
 
 	parse_command_line(argc, argv);
 	openlog("battery_UPS", LOG_PID | (daemonize ? 0 : LOG_PERROR), LOG_DAEMON);
@@ -235,10 +235,12 @@ int main(int argc, char **argv) {
             print_dbg("Charging: capacity now: %d\n", capacity);
             if ((prev_cap != capacity) || (prev_chrg != is_charging))  {
                 syslog(LOG_NOTICE, "charging: capacity = %d\n", capacity);
+                timeout = 0;
             }
         } else {
-            if (prev_chrg != is_charging) {
-                syslog(LOG_NOTICE, "discharging: capacity = %d\n", capacity);
+            syslog(LOG_NOTICE, "discharging: capacity = %d\n", capacity);
+            timeout++;
+            if (timeout > 3) {
                 syslog(LOG_NOTICE, "external power fail, powering off\n");
                 if (exec_prog(poweroff_cmd)) {
                     syslog(LOG_NOTICE, "error of daemon execution\n");
