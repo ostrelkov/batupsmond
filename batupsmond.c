@@ -1,13 +1,18 @@
 /*
  * Short-Description: battery UPS monitor daemon
- * Description:       The batupsmond service daemon is able to monitor
- *                    battery status. If external power supply is absent
- *                    and battery is discharging then daemon execute /sbin/pwrdown
- *                    script to power off
+ * Description:       The daemon 'batupsmond' monitors the state of external power through the 'sysfs' file system.
+ *                    If external power is lost and the system starts to operate on battery power, 
+ *                    then the daemon runs an external `pwrdown` script after a specified timeout to shutdown the system.
+ *                    If power is restored during the timeout (false alarm), then daemon continues monitoring.
  *
+ * Usage:             batupsmond [-n] [-f sec]
+-n - nodaemon
+-h - help
+-f sec - false alarm duration in seconds
+ * 
  * pwrdown script:
 #!/bin/sh
-sleep $1
+# you can run something before powering off
 poweroff
  *
  * Author: Oleg Strelkov <o.strelkov@gmail.com>
@@ -34,7 +39,7 @@ poweroff
 
 //#define DEBUG_PRINT
 
-#define SOFTWARE_VER        "0.4"
+#define SOFTWARE_VER        "0.5"
 
 #define CHARGE_STATUS       "/sys/class/power_supply/battery/status"
 #define BATTERY_CAPACITY    "/sys/class/power_supply/battery/capacity"
@@ -242,6 +247,9 @@ int main(int argc, char **argv) {
         closelog();
         exit(1);
 	}
+
+    capacity = read_capacity();
+    is_charging = charging();
 
     while (1) {
 
